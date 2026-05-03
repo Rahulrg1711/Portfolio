@@ -690,22 +690,27 @@ window.addEventListener('scroll',()=>{
   nav.style.borderBottomColor=window.scrollY>40?'var(--line2)':'var(--line)';
 });
 
-/* ── PREMIUM BACKGROUND ANIMATION ── */
+/* ── BACKGROUND ANIMATION (desktop + mobile) ── */
 (function(){
   const canvas = document.getElementById('bgCanvas');
   const ctx = canvas.getContext('2d');
   let W, H, t = 0;
-  let mouse = { x: -9999, y: -9999, tx: -9999, ty: -9999 };
-  let entered = false;
+  /* pointer = unified mouse/touch position */
+  let ptr = { x: -9999, y: -9999, sx: -9999, sy: -9999, active: false };
+  /* touch ripple rings for mobile tap feedback */
+  let ripples = [];
 
-  function isDark(){ return document.documentElement.getAttribute('data-theme') === 'dark'; }
+  const isMobile = () => window.matchMedia('(pointer:coarse)').matches;
+  const isDark   = () => document.documentElement.getAttribute('data-theme') === 'dark';
 
+  /* ── resize ── */
   function resize(){
-    W = canvas.width = window.innerWidth;
+    W = canvas.width  = window.innerWidth;
     H = canvas.height = window.innerHeight;
+    buildGrid();
   }
 
-  /* ── Flowing aurora orbs ── */
+  /* ── Aurora blobs ── */
   const orbs = [
     { bx:0.72, by:0.18, r:0.52, phase:0,    speed:0.00035, col:'ac' },
     { bx:0.18, by:0.72, r:0.48, phase:2.1,  speed:0.00028, col:'or' },
@@ -713,119 +718,151 @@ window.addEventListener('scroll',()=>{
     { bx:0.85, by:0.78, r:0.32, phase:1.2,  speed:0.00031, col:'or' },
     { bx:0.10, by:0.25, r:0.28, phase:3.5,  speed:0.00038, col:'ac' },
   ];
+  function drawAurora(dark, acRGB, orRGB){
+    ctx.save(); ctx.filter = 'blur(90px)';
+    for(const o of orbs){
+      const ang = t * o.speed * Math.PI*2 + o.phase;
+      const cx  = o.bx*W + Math.cos(ang)*0.12*W;
+      const cy  = o.by*H + Math.sin(ang*1.3)*0.10*H;
+      const rad = o.r * Math.min(W,H);
+      const col = o.col==='ac' ? acRGB : orRGB;
+      const base = dark ? 0.055 : 0.045;
+      const g = ctx.createRadialGradient(cx,cy,0,cx,cy,rad);
+      g.addColorStop(0,   `rgba(${col},${base*2.2})`);
+      g.addColorStop(0.4, `rgba(${col},${base})`);
+      g.addColorStop(1,   `rgba(${col},0)`);
+      ctx.beginPath(); ctx.arc(cx,cy,rad,0,Math.PI*2);
+      ctx.fillStyle=g; ctx.fill();
+    }
+    ctx.restore();
+  }
 
   /* ── Dot grid ── */
-  const GRID = 46;
+  /* sparser on mobile so it doesn't feel cluttered */
   let dots = [];
   function buildGrid(){
     dots = [];
-    const cols = Math.ceil(W / GRID) + 1;
-    const rows = Math.ceil(H / GRID) + 1;
-    for(let r = 0; r <= rows; r++)
-      for(let c = 0; c <= cols; c++)
-        dots.push({ x: c * GRID, y: r * GRID });
+    const GRID = isMobile() ? 58 : 46;
+    const cols = Math.ceil(W/GRID)+1, rows = Math.ceil(H/GRID)+1;
+    for(let r=0; r<=rows; r++)
+      for(let c=0; c<=cols; c++)
+        dots.push({ x:c*GRID, y:r*GRID });
   }
 
-  function drawFrame(){
-    t++;
-    ctx.clearRect(0, 0, W, H);
+  function drawDots(dark, acRGB){
+    /* on mobile use a larger influence radius (finger >> cursor) */
+    const INFLUENCE = isMobile() ? 130 : 200;
+    const dotAlpha  = dark ? 0.13 : 0.10;
+    const px = ptr.sx, py = ptr.sy;
 
-    /* smooth mouse */
-    mouse.tx += (mouse.x - mouse.tx) * 0.07;
-    mouse.ty += (mouse.y - mouse.ty) * 0.07;
-
-    const dark = isDark();
-    const acRGB = dark ? '161,0,255' : '123,0,204';
-    const orRGB = dark ? '199,70,52' : '176,48,32';
-
-    /* ── 1. Aurora blobs ── */
-    ctx.save();
-    ctx.filter = 'blur(90px)';
-    for(const o of orbs){
-      const ang = t * o.speed * Math.PI * 2 + o.phase;
-      const ox  = Math.cos(ang) * 0.12 * W;
-      const oy  = Math.sin(ang * 1.3) * 0.10 * H;
-      const cx  = o.bx * W + ox;
-      const cy  = o.by * H + oy;
-      const rad = o.r * Math.min(W, H);
-      const col = o.col === 'ac' ? acRGB : orRGB;
-      const base = dark ? 0.055 : 0.045;
-      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, rad);
-      g.addColorStop(0, `rgba(${col},${base * 2.2})`);
-      g.addColorStop(0.4, `rgba(${col},${base})`);
-      g.addColorStop(1,   `rgba(${col},0)`);
-      ctx.beginPath();
-      ctx.arc(cx, cy, rad, 0, Math.PI * 2);
-      ctx.fillStyle = g;
-      ctx.fill();
-    }
-    ctx.restore();
-
-    /* ── 2. Dot grid — distorted by mouse ── */
-    const dotAlpha = dark ? 0.13 : 0.1;
-    const mx = mouse.tx, my = mouse.ty;
-    const INFLUENCE = 200;
-
-    ctx.save();
     for(const d of dots){
-      const dx = d.x - mx, dy = d.y - my;
-      const dist = Math.sqrt(dx*dx + dy*dy);
-      let px = d.x, py = d.y, r = 1.1, alpha = dotAlpha;
-      if(dist < INFLUENCE && entered){
-        const pull = (1 - dist / INFLUENCE);
-        px -= dx * pull * 0.22;
-        py -= dy * pull * 0.22;
-        r   = 1.1 + pull * 2.4;
-        alpha = dotAlpha + pull * (dark ? 0.28 : 0.22);
-        /* color shift near cursor */
-        const colMix = `rgba(${acRGB},${alpha * 0.9})`;
-        ctx.beginPath();
-        ctx.arc(px, py, r, 0, Math.PI * 2);
-        ctx.fillStyle = colMix;
+      const dx = d.x-px, dy = d.y-py;
+      const dist = Math.sqrt(dx*dx+dy*dy);
+      let rx=d.x, ry=d.y, r=1.1, alpha=dotAlpha;
+
+      if(dist < INFLUENCE && ptr.active){
+        const pull = 1 - dist/INFLUENCE;
+        rx -= dx*pull*0.22; ry -= dy*pull*0.22;
+        r   = 1.1 + pull*2.4;
+        alpha = dotAlpha + pull*(dark ? 0.28 : 0.22);
+        ctx.beginPath(); ctx.arc(rx,ry,r,0,Math.PI*2);
+        ctx.fillStyle = `rgba(${acRGB},${alpha*0.9})`;
         ctx.fill();
         continue;
       }
-      ctx.beginPath();
-      ctx.arc(px, py, r, 0, Math.PI * 2);
-      ctx.fillStyle = dark
-        ? `rgba(255,255,255,${alpha})`
-        : `rgba(0,0,0,${alpha})`;
+      ctx.beginPath(); ctx.arc(rx,ry,r,0,Math.PI*2);
+      ctx.fillStyle = dark ? `rgba(255,255,255,${alpha})` : `rgba(0,0,0,${alpha})`;
       ctx.fill();
     }
-    ctx.restore();
+  }
 
-    /* ── 3. Mouse spotlight ── */
-    if(entered && mouse.tx > 0){
-      const sg = ctx.createRadialGradient(mx, my, 0, mx, my, 320);
-      if(dark){
-        sg.addColorStop(0,   `rgba(161,0,255,0.07)`);
-        sg.addColorStop(0.5, `rgba(199,70,52,0.03)`);
-        sg.addColorStop(1,   `rgba(0,0,0,0)`);
-      } else {
-        sg.addColorStop(0,   `rgba(123,0,204,0.06)`);
-        sg.addColorStop(0.5, `rgba(176,48,32,0.025)`);
-        sg.addColorStop(1,   `rgba(0,0,0,0)`);
-      }
-      ctx.beginPath();
-      ctx.arc(mx, my, 320, 0, Math.PI * 2);
-      ctx.fillStyle = sg;
-      ctx.fill();
+  /* ── Spotlight ── */
+  function drawSpotlight(dark, acRGB, orRGB){
+    if(!ptr.active) return;
+    const px=ptr.sx, py=ptr.sy;
+    /* bigger spotlight on mobile — finger has no precise cursor */
+    const radius = isMobile() ? 240 : 320;
+    const sg = ctx.createRadialGradient(px,py,0,px,py,radius);
+    sg.addColorStop(0,   `rgba(${acRGB},${dark?0.07:0.05})`);
+    sg.addColorStop(0.5, `rgba(${orRGB},${dark?0.03:0.02})`);
+    sg.addColorStop(1,   `rgba(${orRGB},0)`);
+    ctx.beginPath(); ctx.arc(px,py,radius,0,Math.PI*2);
+    ctx.fillStyle=sg; ctx.fill();
+  }
+
+  /* ── Touch ripples (mobile tap visual feedback) ── */
+  function addRipple(x,y){
+    ripples.push({ x,y, r:0, maxR:110, alpha:0.55, col:'ac' });
+  }
+  function drawRipples(dark, acRGB){
+    for(let i=ripples.length-1; i>=0; i--){
+      const rp=ripples[i];
+      rp.r   += 2.8;
+      rp.alpha *= 0.955;
+      if(rp.r > rp.maxR || rp.alpha < 0.01){ ripples.splice(i,1); continue; }
+      const col = acRGB;
+      ctx.beginPath(); ctx.arc(rp.x,rp.y,rp.r,0,Math.PI*2);
+      ctx.strokeStyle = `rgba(${col},${rp.alpha*(dark?1:0.8)})`;
+      ctx.lineWidth = 1.4; ctx.stroke();
     }
+  }
+
+  /* ── Main loop ── */
+  function drawFrame(){
+    t++;
+    ctx.clearRect(0,0,W,H);
+
+    /* smooth pointer */
+    if(ptr.active){
+      ptr.sx += (ptr.x - ptr.sx) * 0.09;
+      ptr.sy += (ptr.y - ptr.sy) * 0.09;
+    }
+
+    const dark  = isDark();
+    const acRGB = dark ? '161,0,255' : '123,0,204';
+    const orRGB = dark ? '199,70,52'  : '176,48,32';
+
+    drawAurora(dark, acRGB, orRGB);
+    drawDots(dark, acRGB);
+    drawSpotlight(dark, acRGB, orRGB);
+    drawRipples(dark, acRGB);
 
     requestAnimationFrame(drawFrame);
   }
 
-  window.addEventListener('resize', () => { resize(); buildGrid(); });
+  /* ── Event listeners ── */
+  window.addEventListener('resize', resize);
+
+  /* Mouse */
   document.addEventListener('mousemove', e => {
-    if(!entered){ mouse.tx = e.clientX; mouse.ty = e.clientY; entered = true; }
-    mouse.x = e.clientX; mouse.y = e.clientY;
+    if(!ptr.active){ ptr.sx=e.clientX; ptr.sy=e.clientY; }
+    ptr.x=e.clientX; ptr.y=e.clientY; ptr.active=true;
   });
-  document.addEventListener('mouseleave', () => { mouse.x = -9999; mouse.y = -9999; });
+  document.addEventListener('mouseleave', () => { ptr.active=false; ptr.x=-9999; ptr.y=-9999; });
+
+  /* Touch — unified with mouse logic */
+  document.addEventListener('touchstart', e => {
+    const t0=e.touches[0];
+    ptr.sx=t0.clientX; ptr.sy=t0.clientY;
+    ptr.x =t0.clientX; ptr.y =t0.clientY;
+    ptr.active=true;
+    addRipple(t0.clientX, t0.clientY);
+  }, { passive:true });
+
+  document.addEventListener('touchmove', e => {
+    const t0=e.touches[0];
+    ptr.x=t0.clientX; ptr.y=t0.clientY;
+    ptr.active=true;
+  }, { passive:true });
+
+  document.addEventListener('touchend', () => {
+    /* keep spotlight briefly then fade */
+    setTimeout(()=>{ ptr.active=false; ptr.x=-9999; ptr.y=-9999; }, 600);
+  }, { passive:true });
 
   resize();
-  buildGrid();
   drawFrame();
-  setTimeout(() => { canvas.style.opacity = '1'; }, 1400);
+  setTimeout(() => { canvas.style.opacity='1'; }, 1400);
 })();
 </script>
 </body>
